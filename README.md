@@ -67,13 +67,13 @@ Gerber
 ## Top / 正面
 
 <p align="center">
-  <img src="docs/images/top-placement-map.png" alt="Top placement map" width="100%">
+  <img src="docs/images/top-placement.png" alt="Top placement map" width="100%">
 </p>
 
 ## Bottom / 反面
 
 <p align="center">
-  <img src="docs/images/bottom-placement-map.png" alt="Bottom placement map" width="100%">
+  <img src="docs/images/bottom-placement.png" alt="Bottom placement map" width="100%">
 </p>
 
 ### 图中符号含义
