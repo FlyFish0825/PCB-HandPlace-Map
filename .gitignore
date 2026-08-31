@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.DS_Store
+Thumbs.db
+
+# Generated output
+output/
+demo_output/
+贴片定位图/
+双页贴片图*/
+*.pdf
+*.svg
+
+# Real project inputs: keep private by default.
+# Remove/comment these rules if you intentionally want to publish examples.
+BOM_*.xlsx
+BOM_*.xls
+BOM_*.xlsm
+PickAndPlace_*.xlsx
+PickAndPlace_*.xls
+PickAndPlace_*.xlsm
+PickAndPlace_*.csv
+Gerber_*.zip

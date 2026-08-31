@@ -20,6 +20,7 @@ import argparse
 import math
 import re
 import zipfile
+import shutil
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -959,41 +960,11 @@ def draw_one_side(ax, layer_name: str, parts: List[Part], outline, silk, bbox,
         ys = [p[1] for p in pts]
         ax.plot(xs, ys, linewidth=1.35, color="0.00", alpha=1.0, zorder=2)
 
-    for grp in groups:
+    for gi, grp in enumerate(groups):
+        gid = f"g{gi:03d}"
         side, junction, text_pos, label = label_pos[id(grp)]
         jx, jy = junction
         tx, ty = text_pos
-
-        # 所有辅助引线都放在最上层，绝不被文字白底或丝印盖住
-        LINE_Z = 40
-        DOT_Z = 41
-
-        for p in grp:
-            px, py = transform_point(p.x, p.y, bbox, mirror)
-            ax.plot([px, jx], [py, jy],
-                    linewidth=0.16, color="0.24", alpha=0.86,
-                    zorder=LINE_Z, solid_capstyle="round")
-            ax.scatter([px], [py], s=11, facecolors="white",
-                       edgecolors="0.02", linewidths=0.48, zorder=DOT_Z)
-
-        ax.scatter([jx], [jy], s=15, marker="o",
-                   color="0.00", zorder=DOT_Z)
-
-        # 从汇聚点连到标签附近。线仍在最上层。
-        # 终点略停在文字锚点外侧，减少直接穿过本标签文字。
-        ex, ey = tx, ty
-        if side == "left":
-            ex = tx + 0.10
-        elif side == "right":
-            ex = tx - 0.10
-        elif side == "top":
-            ey = ty - 0.20
-        else:
-            ey = ty + 0.20
-
-        ax.plot([jx, ex], [jy, ey],
-                linewidth=0.18, color="0.12", alpha=0.90,
-                zorder=LINE_Z, solid_capstyle="round")
 
         if side == "left":
             ha, va, dx, dy = "right", "center", -0.45, 0
@@ -1004,20 +975,63 @@ def draw_one_side(ax, layer_name: str, parts: List[Part], outline, silk, bbox,
         else:
             ha, va, dx, dy = "center", "top", 0, -0.28
 
+        TEXT_Z = 20
+        LINE_Z = 60
+        DOT_Z = 61
+
+        for pi, p in enumerate(grp):
+            px, py = transform_point(p.x, p.y, bbox, mirror)
+
+            part_line, = ax.plot(
+                [px, jx], [py, jy],
+                linewidth=0.16, color="0.18", alpha=0.90,
+                zorder=LINE_Z, solid_capstyle="round",
+            )
+            part_line.set_gid(f"partline-{gid}-{pi}")
+
+            part_dot = ax.scatter(
+                [px], [py], s=11,
+                facecolors="white", edgecolors="0.01",
+                linewidths=0.48, zorder=DOT_Z,
+            )
+            part_dot.set_gid(f"partdot-{gid}-{pi}")
+
+        anchor_dot = ax.scatter(
+            [jx], [jy], s=16, marker="o",
+            color="0.00", zorder=DOT_Z,
+        )
+        anchor_dot.set_gid(f"anchor-{gid}")
+
         kwargs = dict(
             fontsize=7.1,
             ha=ha,
             va=va,
             linespacing=1.10,
             fontweight="bold",
-            zorder=20,
-            bbox=dict(boxstyle="round,pad=0.16", facecolor="white",
-                      edgecolor="none", alpha=0.94),
+            zorder=TEXT_Z,
+            bbox=dict(
+                boxstyle="round,pad=0.13",
+                facecolor="white",
+                edgecolor="none",
+                alpha=0.92,
+            ),
         )
         if font_prop is not None:
             kwargs["fontproperties"] = font_prop
 
-        ax.text(tx + dx, ty + dy, label, **kwargs)
+        text_x = tx + dx
+        text_y = ty + dy
+
+        label_artist = ax.text(text_x, text_y, label, **kwargs)
+        label_artist.set_gid(f"label-{gid}")
+
+        # 线直接连到最终文字锚点附近，并保持在线条最高图层。
+        label_line, = ax.plot(
+            [jx, text_x], [jy, text_y],
+            linewidth=0.18, color="0.06", alpha=0.96,
+            zorder=LINE_Z, solid_capstyle="round",
+        )
+        label_line.set_gid(f"labelline-{gid}")
 
     mx = max(18.0, w * 0.42)
     my = max(14.0, h * 0.55)
@@ -1027,7 +1041,7 @@ def draw_one_side(ax, layer_name: str, parts: List[Part], outline, silk, bbox,
     title_kwargs = dict(fontsize=12, fontweight="bold")
     if font_prop is not None:
         title_kwargs["fontproperties"] = font_prop
-    ax.set_title(layer_name, **title_kwargs)
+    #ax.set_title(layer_name, **title_kwargs)
 
 
 def draw_two_sheets(parts: List[Part], outline, top_silk, bottom_silk, bbox,
@@ -1143,6 +1157,7 @@ def main():
     out_top_png = args.out / "PCB_贴片定位图_Top.png"
     out_bottom_svg = args.out / "PCB_贴片定位图_Bottom.svg"
     out_bottom_png = args.out / "PCB_贴片定位图_Bottom.png"
+    out_editor_html = args.out / "PCB_贴片定位图_SVG编辑器.html"
 
     draw_two_sheets(
         parts=parts, outline=outline,
@@ -1155,6 +1170,12 @@ def main():
         max_group_size=max(1, args.max_spatial_group)
     )
 
+    editor_src = Path(__file__).with_name("svg_editor.html")
+    if editor_src.exists():
+        shutil.copy2(editor_src, out_editor_html)
+    else:
+        print("提示：未找到 svg_editor.html，跳过 SVG 编辑器。")
+
     write_summary(args.out, parts, missing_pnp, missing_bom)
 
     print("完成。")
@@ -1163,6 +1184,8 @@ def main():
     print(f"Top PNG: {out_top_png}")
     print(f"Bottom SVG: {out_bottom_svg}")
     print(f"Bottom PNG: {out_bottom_png}")
+    if out_editor_html.exists():
+        print(f"SVG 编辑器: {out_editor_html}")
 
 
 if __name__ == "__main__":
