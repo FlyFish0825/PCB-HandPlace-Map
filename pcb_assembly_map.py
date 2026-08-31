@@ -1111,7 +1111,7 @@ def main():
     ap.add_argument("--bom", required=True, type=Path, help="BOM xlsx")
     ap.add_argument("--pnp", required=True, type=Path, help="PickAndPlace xlsx")
     ap.add_argument("--gerber", required=True, type=Path, help="Gerber zip")
-    ap.add_argument("--out", type=Path, default=Path("双页贴片图_防遮挡版"), help="输出目录")
+    ap.add_argument("--out", type=Path, default=Path("output"), help="输出目录")
     ap.add_argument("--include-dnp", action="store_true", help="包含 DNP")
     ap.add_argument("--no-bottom-mirror", action="store_true", help="Bottom 不镜像")
     ap.add_argument("--phase-size", type=int, default=3, help="优先三相/重复电路分组数量，默认 3")
