@@ -1,0 +1,647 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PCB-HandPlace-Map SVG Editor</title>
+<style>
+:root{color-scheme:light}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;font-family:Arial,"Microsoft YaHei",sans-serif;background:#eef1f4;color:#16181b}
+body{display:flex;flex-direction:column;overflow:hidden}
+.toolbar{
+  flex:0 0 auto;display:flex;align-items:center;gap:7px;flex-wrap:wrap;
+  padding:8px 10px;background:white;border-bottom:1px solid #ccd1d8;
+  box-shadow:0 1px 5px #0001;z-index:20
+}
+button,.filebtn{
+  border:1px solid #aeb4bc;background:#fff;border-radius:6px;padding:6px 10px;
+  font-size:13px;cursor:pointer;white-space:nowrap
+}
+button:hover,.filebtn:hover{background:#f2f5f7}
+button.primary{background:#1769aa;color:white;border-color:#1769aa}
+button.primary:hover{background:#12578e}
+button.danger{color:#a51d1d}
+.sep{width:1px;height:25px;background:#d9dde2;margin:0 2px}
+.status{margin-left:auto;font-size:12px;color:#5d6670;max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tabs{display:flex;gap:4px}
+.tab.active{background:#222;color:white;border-color:#222}
+.workspace{flex:1 1 auto;min-height:0;display:flex}
+.sidebar{
+  width:250px;flex:0 0 250px;background:#fff;border-right:1px solid #ccd1d8;
+  padding:10px;overflow:auto;font-size:13px
+}
+.sidebar h3{margin:3px 0 8px;font-size:14px}
+.sidebar p{margin:6px 0;line-height:1.45;color:#4b535c}
+.sidebar code{font-family:Consolas,monospace;font-size:12px;background:#f3f4f6;padding:1px 3px;border-radius:3px}
+#viewer{
+  flex:1 1 auto;min-width:0;min-height:0;overflow:auto;
+  position:relative;background:#dfe4e8;padding:18px
+}
+.svg-host{
+  margin:auto;background:white;box-shadow:0 3px 18px #0003;
+  transform-origin:top left;position:relative
+}
+.svg-host>svg{display:block;width:100%;height:auto;user-select:none}
+.empty{
+  height:100%;display:flex;align-items:center;justify-content:center;
+  color:#69727c;font-size:16px;text-align:center;line-height:1.8
+}
+#selection{
+  margin-top:12px;padding:8px;border:1px solid #d9dde2;border-radius:6px;background:#fafbfc;
+  min-height:58px
+}
+kbd{background:#eee;border:1px solid #ccc;border-bottom-width:2px;border-radius:4px;padding:1px 4px}
+.hint{font-size:12px;color:#737b84}
+body.dragging{cursor:grabbing}
+body.dragging *{cursor:grabbing!important}
+.svg-host svg g[id^="label-"]{cursor:move}
+.svg-host svg g[id^="anchor-"]{cursor:move}
+.svg-host svg g[id^="labelline-"],
+.svg-host svg g[id^="partline-"]{pointer-events:none}
+.svg-host svg g[id^="label-"].editor-selected{filter:drop-shadow(0 0 2px #1683ff)}
+.svg-host svg g[id^="anchor-"].editor-selected{filter:drop-shadow(0 0 2px #1683ff)}
+@media(max-width:900px){.sidebar{display:none}}
+@media print{
+  body{overflow:visible;background:#fff}
+  .toolbar,.sidebar{display:none!important}
+  .workspace,#viewer{display:block;overflow:visible;padding:0;background:#fff}
+  .svg-host{box-shadow:none;width:297mm!important;margin:0!important}
+  .svg-host>svg{width:297mm!important;height:210mm!important}
+}
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <button class="primary" id="openFolderBtn">打开“贴片定位图”文件夹</button>
+  <label class="filebtn">加载 SVG
+    <input id="svgInput" type="file" accept=".svg,image/svg+xml" multiple hidden>
+  </label>
+  <div class="sep"></div>
+  <div class="tabs">
+    <button class="tab active" data-side="top">Top</button>
+    <button class="tab" data-side="bottom">Bottom</button>
+  </div>
+  <div class="sep"></div>
+  <button id="zoomOut">－</button>
+  <button id="zoomReset">100%</button>
+  <button id="zoomIn">＋</button>
+  <div class="sep"></div>
+  <button id="undoBtn">撤销</button>
+  <button id="resetBtn">恢复本次载入</button>
+  <div class="sep"></div>
+  <button class="primary" id="writeAllBtn">写回全部 SVG / PNG / PDF</button>
+  <button id="downloadCurrentBtn">下载当前 SVG</button>
+  <button id="downloadAllBtn">下载全部</button>
+  <span class="status" id="status">请打开输出文件夹，或加载 Top / Bottom SVG。</span>
+</div>
+
+<div class="workspace">
+  <aside class="sidebar">
+    <h3>操作</h3>
+    <p><b>拖文字：</b>直接拖动参数/位号标签。</p>
+    <p><b>拖黑点：</b>拖动汇聚节点，相关引线实时跟随。</p>
+    <p><b>微调：</b>选中后使用 <kbd>←</kbd><kbd>→</kbd><kbd>↑</kbd><kbd>↓</kbd>。</p>
+    <p><b>加速微调：</b><kbd>Shift</kbd> + 方向键。</p>
+    <p><b>撤销：</b><kbd>Ctrl</kbd>+<kbd>Z</kbd>。</p>
+    <p>编辑器直接载入 Python 生成的 <code>SVG</code>，不会重新绘制 PCB，因此画面与原 SVG 完全一致。</p>
+    <h3>当前选择</h3>
+    <div id="selection">未选择</div>
+    <p class="hint">“写回全部”需要 Chrome / Edge 的文件夹写入权限。浏览器会先让你选择/授权文件夹，不会静默修改其他文件。</p>
+  </aside>
+
+  <main id="viewer">
+    <div class="empty" id="empty">
+      打开生成目录中的 SVG。<br>
+      推荐直接点击“打开贴片定位图文件夹”，自动载入 Top / Bottom。
+    </div>
+  </main>
+</div>
+
+<script>
+"use strict";
+
+const FILES = {
+  topSvg: "PCB_贴片定位图_Top.svg",
+  bottomSvg: "PCB_贴片定位图_Bottom.svg",
+  topPng: "PCB_贴片定位图_Top.png",
+  bottomPng: "PCB_贴片定位图_Bottom.png",
+  pdf: "PCB_双页手工贴片定位图.pdf"
+};
+
+const state = {
+  dirHandle: null,
+  active: "top",
+  zoom: 1,
+  sides: {
+    top: {svg:null, host:null, name:FILES.topSvg, original:null, models:new Map(), undo:[]},
+    bottom: {svg:null, host:null, name:FILES.bottomSvg, original:null, models:new Map(), undo:[]}
+  },
+  drag: null,
+  selected: null
+};
+
+const viewer = document.getElementById("viewer");
+const empty = document.getElementById("empty");
+const statusEl = document.getElementById("status");
+const selectionEl = document.getElementById("selection");
+
+function status(msg){ statusEl.textContent = msg; }
+
+function numbersFromPath(d){
+  const m = (d || "").match(/[-+]?(?:\d*\.)?\d+(?:[eE][-+]?\d+)?/g);
+  return m ? m.map(Number) : [];
+}
+
+function linePathPoints(group){
+  if(!group) return null;
+  const path = group.querySelector("path");
+  if(!path) return null;
+  const n = numbersFromPath(path.getAttribute("d"));
+  if(n.length < 4) return null;
+  return {path, x1:n[0], y1:n[1], x2:n[2], y2:n[3]};
+}
+
+function setLinePath(rec,x1,y1,x2,y2){
+  if(!rec || !rec.path) return;
+  rec.path.setAttribute("d", `M ${x1} ${y1}\nL ${x2} ${y2}\n`);
+}
+
+function sideFromFilename(name){
+  const s = name.toLowerCase();
+  if(s.includes("bottom") || s.includes("反面")) return "bottom";
+  if(s.includes("top") || s.includes("正面")) return "top";
+  return null;
+}
+
+function parseSvg(text){
+  const doc = new DOMParser().parseFromString(text, "image/svg+xml");
+  const err = doc.querySelector("parsererror");
+  if(err) throw new Error("SVG 解析失败");
+  const svg = doc.documentElement;
+  if(svg.tagName.toLowerCase() !== "svg") throw new Error("不是 SVG 文件");
+  return document.importNode(svg, true);
+}
+
+function svgString(svg){
+  const clone = svg.cloneNode(true);
+  // Editor-only visual classes are not required in the exported file.
+  clone.querySelectorAll(".editor-selected").forEach(x=>x.classList.remove("editor-selected"));
+  return '<?xml version="1.0" encoding="utf-8" standalone="no"?>\n' +
+    new XMLSerializer().serializeToString(clone);
+}
+
+function extractGroupId(id,prefix){
+  return id && id.startsWith(prefix) ? id.slice(prefix.length) : null;
+}
+
+function initModels(side){
+  side.models.clear();
+  const svg = side.svg;
+  const labels = [...svg.querySelectorAll('g[id^="label-"]')];
+
+  for(const label of labels){
+    const gid = extractGroupId(label.id,"label-");
+    if(!gid) continue;
+    const anchor = svg.querySelector(`#anchor-${CSS.escape(gid)}`);
+    const labelLineG = svg.querySelector(`#labelline-${CSS.escape(gid)}`);
+    const labelLine = linePathPoints(labelLineG);
+    const partLineGs = [...svg.querySelectorAll(`g[id^="partline-${CSS.escape(gid)}-"]`)];
+    const partLines = partLineGs.map(linePathPoints).filter(Boolean);
+
+    const model = {
+      gid,label,anchor,labelLine,partLines,
+      baseLabelTransform: label.getAttribute("transform") || "",
+      baseAnchorTransform: anchor ? (anchor.getAttribute("transform") || "") : "",
+      labelDx:0,labelDy:0,anchorDx:0,anchorDy:0,
+      originalLabelLine: labelLine ? {x1:labelLine.x1,y1:labelLine.y1,x2:labelLine.x2,y2:labelLine.y2} : null,
+      originalPartLines: partLines.map(p=>({x1:p.x1,y1:p.y1,x2:p.x2,y2:p.y2}))
+    };
+    side.models.set(gid,model);
+  }
+}
+
+function setTranslatedTransform(el,base,dx,dy){
+  if(!el) return;
+  const t = `${base ? base + " " : ""}translate(${dx} ${dy})`;
+  el.setAttribute("transform", t.trim());
+}
+
+function updateModel(m){
+  setTranslatedTransform(m.label,m.baseLabelTransform,m.labelDx,m.labelDy);
+  setTranslatedTransform(m.anchor,m.baseAnchorTransform,m.anchorDx,m.anchorDy);
+
+  if(m.labelLine && m.originalLabelLine){
+    const o=m.originalLabelLine;
+    setLinePath(
+      m.labelLine,
+      o.x1 + m.anchorDx, o.y1 + m.anchorDy,
+      o.x2 + m.labelDx,  o.y2 + m.labelDy
+    );
+  }
+  m.partLines.forEach((p,i)=>{
+    const o=m.originalPartLines[i];
+    setLinePath(p,o.x1,o.y1,o.x2+m.anchorDx,o.y2+m.anchorDy);
+  });
+}
+
+function snapshot(side){
+  const snap={};
+  side.models.forEach((m,gid)=>{
+    snap[gid]=[m.labelDx,m.labelDy,m.anchorDx,m.anchorDy];
+  });
+  return snap;
+}
+
+function applySnapshot(side,snap){
+  side.models.forEach((m,gid)=>{
+    const v=snap[gid] || [0,0,0,0];
+    [m.labelDx,m.labelDy,m.anchorDx,m.anchorDy]=v;
+    updateModel(m);
+  });
+}
+
+function pushUndo(side){
+  side.undo.push(snapshot(side));
+  if(side.undo.length>80) side.undo.shift();
+}
+
+function undo(){
+  const side=state.sides[state.active];
+  if(!side.svg || !side.undo.length) return;
+  const snap=side.undo.pop();
+  applySnapshot(side,snap);
+  status("已撤销一步");
+}
+
+function clearSelection(){
+  document.querySelectorAll(".editor-selected").forEach(x=>x.classList.remove("editor-selected"));
+  state.selected=null;
+  selectionEl.textContent="未选择";
+}
+
+function selectModel(kind,m){
+  clearSelection();
+  const el=kind==="label"?m.label:m.anchor;
+  if(el) el.classList.add("editor-selected");
+  state.selected={kind,model:m};
+  selectionEl.innerHTML =
+    `<b>${kind==="label"?"标签":"汇聚点"}</b><br>`+
+    `组：<code>${m.gid}</code><br>`+
+    `标签偏移：${m.labelDx.toFixed(2)}, ${m.labelDy.toFixed(2)}<br>`+
+    `黑点偏移：${m.anchorDx.toFixed(2)}, ${m.anchorDy.toFixed(2)}`;
+}
+
+function svgPoint(svg,evt){
+  const p=svg.createSVGPoint();
+  p.x=evt.clientX; p.y=evt.clientY;
+  return p.matrixTransform(svg.getScreenCTM().inverse());
+}
+
+function installInteraction(side){
+  const svg=side.svg;
+  svg.style.touchAction="none";
+
+  svg.addEventListener("pointerdown",evt=>{
+    const label = evt.target.closest && evt.target.closest('g[id^="label-"]');
+    const anchor = evt.target.closest && evt.target.closest('g[id^="anchor-"]');
+    const target = label || anchor;
+    if(!target) return;
+
+    const kind=label?"label":"anchor";
+    const gid=extractGroupId(target.id,kind==="label"?"label-":"anchor-");
+    const m=side.models.get(gid);
+    if(!m) return;
+
+    evt.preventDefault();
+    pushUndo(side);
+    selectModel(kind,m);
+
+    const p=svgPoint(svg,evt);
+    const dx=kind==="label"?m.labelDx:m.anchorDx;
+    const dy=kind==="label"?m.labelDy:m.anchorDy;
+    state.drag={side,svg,kind,m,start:p,baseDx:dx,baseDy:dy,pointerId:evt.pointerId};
+    svg.setPointerCapture(evt.pointerId);
+    document.body.classList.add("dragging");
+  });
+
+  svg.addEventListener("pointermove",evt=>{
+    const d=state.drag;
+    if(!d || d.svg!==svg) return;
+    const p=svgPoint(svg,evt);
+    const ndx=d.baseDx+(p.x-d.start.x);
+    const ndy=d.baseDy+(p.y-d.start.y);
+    if(d.kind==="label"){ d.m.labelDx=ndx; d.m.labelDy=ndy; }
+    else { d.m.anchorDx=ndx; d.m.anchorDy=ndy; }
+    updateModel(d.m);
+    selectModel(d.kind,d.m);
+  });
+
+  function endDrag(){
+    if(state.drag && state.drag.svg===svg){
+      state.drag=null;
+      document.body.classList.remove("dragging");
+    }
+  }
+  svg.addEventListener("pointerup",endDrag);
+  svg.addEventListener("pointercancel",endDrag);
+}
+
+function renderSide(which,text,name){
+  const side=state.sides[which];
+  const svg=parseSvg(text);
+  side.svg=svg;
+  side.name=name || (which==="top"?FILES.topSvg:FILES.bottomSvg);
+  side.original=text;
+  side.undo=[];
+
+  const host=document.createElement("div");
+  host.className="svg-host";
+  host.dataset.side=which;
+  host.style.display=which===state.active?"block":"none";
+  host.style.width=(state.zoom*100)+"%";
+  host.appendChild(svg);
+  side.host=host;
+
+  [...viewer.querySelectorAll(".svg-host")].forEach(h=>{
+    if(h.dataset.side===which) h.remove();
+  });
+  viewer.appendChild(host);
+  empty.style.display="none";
+
+  initModels(side);
+  installInteraction(side);
+
+  const editable=side.models.size;
+  if(editable===0){
+    status(`${name}: 已载入，但没有编辑元数据。请用新版 Python 重新生成 SVG。`);
+  }else{
+    status(`${name}: 已载入，检测到 ${editable} 组可拖动标签。`);
+  }
+  switchSide(which);
+}
+
+function switchSide(which){
+  state.active=which;
+  document.querySelectorAll(".tab").forEach(b=>b.classList.toggle("active",b.dataset.side===which));
+  Object.entries(state.sides).forEach(([k,s])=>{
+    if(s.host) s.host.style.display=k===which?"block":"none";
+  });
+  clearSelection();
+}
+
+async function loadFiles(files){
+  for(const file of files){
+    if(!file.name.toLowerCase().endsWith(".svg")) continue;
+    const which=sideFromFilename(file.name);
+    if(!which) continue;
+    renderSide(which,await file.text(),file.name);
+  }
+}
+
+async function openFolder(){
+  if(!window.showDirectoryPicker){
+    alert("当前浏览器不支持直接文件夹写回。请使用 Chrome / Edge，或用“加载 SVG”后通过下载保存。");
+    return;
+  }
+  try{
+    const dir=await window.showDirectoryPicker({mode:"readwrite"});
+    state.dirHandle=dir;
+    let loaded=0;
+    for(const [which,name] of [["top",FILES.topSvg],["bottom",FILES.bottomSvg]]){
+      try{
+        const h=await dir.getFileHandle(name);
+        const f=await h.getFile();
+        renderSide(which,await f.text(),name);
+        loaded++;
+      }catch(e){}
+    }
+    if(!loaded) alert("该文件夹中没有找到标准 Top / Bottom SVG 文件。");
+    else status(`已打开文件夹：${dir.name}。编辑后可直接“写回全部”。`);
+  }catch(e){
+    if(e.name!=="AbortError") alert("打开文件夹失败："+e);
+  }
+}
+
+function setZoom(z){
+  state.zoom=Math.min(3,Math.max(.3,z));
+  Object.values(state.sides).forEach(s=>{
+    if(s.host) s.host.style.width=(state.zoom*100)+"%";
+  });
+  document.getElementById("zoomReset").textContent=Math.round(state.zoom*100)+"%";
+}
+
+function currentSvgText(which){
+  const s=state.sides[which];
+  return s.svg?svgString(s.svg):null;
+}
+
+async function svgToCanvas(svgText,dpi=320){
+  const parser=new DOMParser();
+  const doc=parser.parseFromString(svgText,"image/svg+xml");
+  const root=doc.documentElement;
+  const vb=(root.getAttribute("viewBox")||"0 0 841.68 595.44").trim().split(/\s+/).map(Number);
+  const ratio=vb[3]/vb[2];
+  const width=Math.round(11.69*dpi);
+  const height=Math.round(width*ratio);
+
+  const blob=new Blob([svgText],{type:"image/svg+xml;charset=utf-8"});
+  const url=URL.createObjectURL(blob);
+  try{
+    const img=new Image();
+    await new Promise((res,rej)=>{img.onload=res;img.onerror=rej;img.src=url});
+    const c=document.createElement("canvas");
+    c.width=width;c.height=height;
+    const ctx=c.getContext("2d");
+    ctx.fillStyle="#fff";ctx.fillRect(0,0,width,height);
+    ctx.drawImage(img,0,0,width,height);
+    return c;
+  } finally {URL.revokeObjectURL(url)}
+}
+
+function canvasBlob(canvas,type,quality){
+  return new Promise((resolve,reject)=>{
+    canvas.toBlob(b=>b?resolve(b):reject(new Error("Canvas 导出失败")),type,quality);
+  });
+}
+
+function asciiBytes(s){return new TextEncoder().encode(s)}
+function concatBytes(parts){
+  const total=parts.reduce((n,p)=>n+p.length,0);
+  const out=new Uint8Array(total);let o=0;
+  for(const p of parts){out.set(p,o);o+=p.length}
+  return out;
+}
+function pad10(n){return String(n).padStart(10,"0")}
+
+async function buildPdfBlob(svgTexts){
+  const pages=[];
+  for(const t of svgTexts){
+    if(!t) continue;
+    const canvas=await svgToCanvas(t,300);
+    const jpeg=await canvasBlob(canvas,"image/jpeg",0.96);
+    pages.push({bytes:new Uint8Array(await jpeg.arrayBuffer()),w:canvas.width,h:canvas.height});
+  }
+  if(!pages.length) throw new Error("没有可导出的页面");
+
+  const pageW=841.89,pageH=595.28; // A4 landscape pt
+  const objects=new Map();
+  const catalogId=1,pagesId=2;
+  const kids=[];
+
+  pages.forEach((img,i)=>{
+    const pageId=3+i*3,contentId=4+i*3,imageId=5+i*3;
+    kids.push(`${pageId} 0 R`);
+    const scale=Math.min(pageW/img.w,pageH/img.h);
+    const dw=img.w*scale,dh=img.h*scale;
+    const x=(pageW-dw)/2,y=(pageH-dh)/2;
+    const content=`q\n${dw.toFixed(4)} 0 0 ${dh.toFixed(4)} ${x.toFixed(4)} ${y.toFixed(4)} cm\n/Im${i+1} Do\nQ\n`;
+    const cb=asciiBytes(content);
+
+    objects.set(pageId,asciiBytes(
+      `${pageId} 0 obj\n<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${pageW} ${pageH}] `+
+      `/Resources << /XObject << /Im${i+1} ${imageId} 0 R >> >> /Contents ${contentId} 0 R >>\nendobj\n`
+    ));
+    objects.set(contentId,concatBytes([
+      asciiBytes(`${contentId} 0 obj\n<< /Length ${cb.length} >>\nstream\n`),
+      cb,asciiBytes("endstream\nendobj\n")
+    ]));
+    objects.set(imageId,concatBytes([
+      asciiBytes(`${imageId} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${img.w} /Height ${img.h} `+
+        `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${img.bytes.length} >>\nstream\n`),
+      img.bytes,asciiBytes("\nendstream\nendobj\n")
+    ]));
+  });
+
+  objects.set(catalogId,asciiBytes(`${catalogId} 0 obj\n<< /Type /Catalog /Pages ${pagesId} 0 R >>\nendobj\n`));
+  objects.set(pagesId,asciiBytes(`${pagesId} 0 obj\n<< /Type /Pages /Kids [${kids.join(" ")}] /Count ${pages.length} >>\nendobj\n`));
+
+  const maxId=2+pages.length*3;
+  const header=concatBytes([asciiBytes("%PDF-1.4\n"),new Uint8Array([0x25,0xe2,0xe3,0xcf,0xd3,0x0a])]);
+  const chunks=[header];
+  const offsets=new Array(maxId+1).fill(0);
+  let offset=header.length;
+  for(let id=1;id<=maxId;id++){
+    const obj=objects.get(id);
+    offsets[id]=offset;chunks.push(obj);offset+=obj.length;
+  }
+  const xrefOffset=offset;
+  let xref=`xref\n0 ${maxId+1}\n0000000000 65535 f \n`;
+  for(let id=1;id<=maxId;id++) xref+=`${pad10(offsets[id])} 00000 n \n`;
+  const trailer=`trailer\n<< /Size ${maxId+1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  chunks.push(asciiBytes(xref+trailer));
+  return new Blob([concatBytes(chunks)],{type:"application/pdf"});
+}
+
+async function writeBlob(dir,name,blob){
+  const h=await dir.getFileHandle(name,{create:true});
+  const w=await h.createWritable();
+  await w.write(blob);await w.close();
+}
+
+async function writeText(dir,name,text,type){
+  await writeBlob(dir,name,new Blob([text],{type}));
+}
+
+async function writeAll(){
+  const top=currentSvgText("top"),bottom=currentSvgText("bottom");
+  if(!top && !bottom){alert("请先载入 SVG。");return}
+  if(!state.dirHandle){
+    alert("请先点击“打开贴片定位图文件夹”，授权写入后才能直接覆盖原文件。");
+    return;
+  }
+  try{
+    status("正在写回 SVG ...");
+    if(top) await writeText(state.dirHandle,FILES.topSvg,top,"image/svg+xml");
+    if(bottom) await writeText(state.dirHandle,FILES.bottomSvg,bottom,"image/svg+xml");
+
+    status("正在生成 PNG ...");
+    if(top){
+      const c=await svgToCanvas(top,320);
+      await writeBlob(state.dirHandle,FILES.topPng,await canvasBlob(c,"image/png"));
+    }
+    if(bottom){
+      const c=await svgToCanvas(bottom,320);
+      await writeBlob(state.dirHandle,FILES.bottomPng,await canvasBlob(c,"image/png"));
+    }
+
+    status("正在生成双页 PDF ...");
+    const pdf=await buildPdfBlob([top,bottom]);
+    await writeBlob(state.dirHandle,FILES.pdf,pdf);
+    status("完成：SVG / PNG / PDF 已写回原文件夹并覆盖同名文件。");
+    alert("已完成写回：\nTop/Bottom SVG\nTop/Bottom PNG\n双页 PDF");
+  }catch(e){
+    console.error(e);alert("写回失败："+e);status("写回失败");
+  }
+}
+
+function downloadBlob(name,blob){
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);a.download=name;a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1500);
+}
+function downloadText(name,text,type){
+  downloadBlob(name,new Blob([text],{type}));
+}
+
+async function downloadCurrent(){
+  const which=state.active,s=currentSvgText(which);
+  if(!s){alert("当前页面未载入 SVG");return}
+  downloadText(state.sides[which].name,s,"image/svg+xml");
+}
+
+async function downloadAll(){
+  const top=currentSvgText("top"),bottom=currentSvgText("bottom");
+  if(!top && !bottom){alert("请先载入 SVG");return}
+  if(top){
+    downloadText(FILES.topSvg,top,"image/svg+xml");
+    const c=await svgToCanvas(top,320);downloadBlob(FILES.topPng,await canvasBlob(c,"image/png"));
+  }
+  if(bottom){
+    downloadText(FILES.bottomSvg,bottom,"image/svg+xml");
+    const c=await svgToCanvas(bottom,320);downloadBlob(FILES.bottomPng,await canvasBlob(c,"image/png"));
+  }
+  const pdf=await buildPdfBlob([top,bottom]);
+  downloadBlob(FILES.pdf,pdf);
+}
+
+function resetCurrent(){
+  const s=state.sides[state.active];
+  if(!s.svg || !s.original)return;
+  if(!confirm("恢复为本次载入的原始 SVG？当前拖动修改会丢失。"))return;
+  renderSide(state.active,s.original,s.name);
+}
+
+document.getElementById("openFolderBtn").onclick=openFolder;
+document.getElementById("svgInput").addEventListener("change",e=>loadFiles([...e.target.files]));
+document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>switchSide(b.dataset.side));
+document.getElementById("zoomIn").onclick=()=>setZoom(state.zoom*1.15);
+document.getElementById("zoomOut").onclick=()=>setZoom(state.zoom/1.15);
+document.getElementById("zoomReset").onclick=()=>setZoom(1);
+document.getElementById("undoBtn").onclick=undo;
+document.getElementById("resetBtn").onclick=resetCurrent;
+document.getElementById("writeAllBtn").onclick=writeAll;
+document.getElementById("downloadCurrentBtn").onclick=downloadCurrent;
+document.getElementById("downloadAllBtn").onclick=downloadAll;
+
+window.addEventListener("keydown",e=>{
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="z"){e.preventDefault();undo();return}
+  if(!state.selected)return;
+  if(!["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(e.key))return;
+  e.preventDefault();
+  const side=state.sides[state.active];
+  pushUndo(side);
+  const step=e.shiftKey?2.0:0.25;
+  const m=state.selected.model;
+  let dx=0,dy=0;
+  if(e.key==="ArrowLeft")dx=-step;
+  if(e.key==="ArrowRight")dx=step;
+  if(e.key==="ArrowUp")dy=-step;
+  if(e.key==="ArrowDown")dy=step;
+  if(state.selected.kind==="label"){m.labelDx+=dx;m.labelDy+=dy}
+  else{m.anchorDx+=dx;m.anchorDy+=dy}
+  updateModel(m);selectModel(state.selected.kind,m);
+});
+</script>
+</body>
+</html>
