@@ -184,6 +184,8 @@ def find_col(headers: Sequence[str], aliases: Sequence[str], required=True) -> O
             return hmap[k]
     for i, h in enumerate(headers):
         nh = norm_header(h)
+        if not nh:
+            continue
         for a in aliases:
             na = norm_header(a)
             if na and (na in nh or nh in na):
@@ -191,6 +193,35 @@ def find_col(headers: Sequence[str], aliases: Sequence[str], required=True) -> O
     if required:
         raise KeyError(f"找不到列：{aliases}；现有列：{list(headers)}")
     return None
+
+
+def find_header_row(
+    rows: Sequence[Sequence[str]],
+    required_alias_groups: Sequence[Sequence[str]],
+    max_scan: int = 50,
+) -> int:
+    """Find the row containing the actual column headers.
+
+    BOM exports from EDA tools often put report metadata/title rows before the
+    table header.  The old code assumed row 1 was always the header, which
+    made those files look like they had no Designator/Value columns.
+    """
+    best_index = None
+    best_score = -1
+    for index, row in enumerate(rows[:max_scan]):
+        score = 0
+        for aliases in required_alias_groups:
+            if find_col(row, aliases, required=False) is not None:
+                score += 1
+        if score > best_score:
+            best_index = index
+            best_score = score
+        if score == len(required_alias_groups):
+            return index
+
+    if best_index is None or best_score <= 0:
+        raise KeyError("找不到表头行；请确认 Excel 中包含所需列")
+    return best_index
 
 
 def cell(row: Sequence[str], idx: Optional[int], default="") -> str:
@@ -245,35 +276,152 @@ def canonical_value(v: str) -> str:
     return s.lower()
 
 
+
+def infer_category_from_ref(ref: str) -> str:
+    """BOM 没有 Category/分类列时，根据位号前缀推断基本器件类型。"""
+    ref = str(ref or "").strip().upper()
+    m = re.match(r"([A-Z]+)", ref)
+    prefix = m.group(1) if m else ""
+
+    # 先判断长前缀，避免 LED 被 L 提前匹配。
+    mapping = {
+        "LED": "LED",
+        "TVS": "TVS",
+        "FB": "磁珠",
+        "R": "电阻",
+        "C": "电容",
+        "L": "电感",
+        "D": "二极管",
+        "Q": "MOSFET/晶体管",
+        "U": "IC",
+        "IC": "IC",
+        "J": "连接器",
+        "P": "连接器",
+        "CN": "连接器",
+        "X": "晶振",
+        "Y": "晶振",
+        "SW": "开关",
+        "F": "保险丝",
+        "TP": "测试点",
+        "T": "变压器",
+    }
+
+    if prefix in mapping:
+        return mapping[prefix]
+
+    # 兼容 R1A、LED1、CN3 等前缀形式。
+    for key in sorted(mapping, key=len, reverse=True):
+        if prefix.startswith(key):
+            return mapping[key]
+
+    return "其他"
+
+
+
 def load_bom(path: Path) -> Dict[str, BomPart]:
     rows = read_xlsx_rows(path, preferred_sheet="最终BOM")
     if not rows:
         raise RuntimeError("BOM 为空")
 
-    headers = rows[0]
-    i_cat = find_col(headers, ["分类", "category", "类型", "type"])
-    i_ref = find_col(headers, ["位号", "designator", "reference", "refdes", "refs"])
-    i_val = find_col(headers, ["参数/型号", "参数", "型号", "value", "comment", "part"])
-    i_fp = find_col(headers, ["封装", "footprint", "package"], required=False)
-    i_asm = find_col(headers, ["装配", "assembly", "dnp", "贴装"], required=False)
-    i_note = find_col(headers, ["备注", "note", "notes"], required=False)
+    header_row = find_header_row(
+        rows,
+        [
+            [
+                "位号", "designator", "designators", "reference",
+                "reference designator", "refdes", "ref", "refs",
+            ],
+            [
+                "参数/型号", "参数", "型号", "value", "comment",
+                "part", "part number", "partnumber", "manufacturer part",
+                "mpn", "description", "name",
+            ],
+        ],
+    )
+    headers = rows[header_row]
+    data_rows = rows[header_row + 1:]
+
+    # 必需：位号 + 参数/型号
+    # 可选：分类、封装、装配、备注
+    i_ref = find_col(
+        headers,
+        [
+            "位号", "designator", "designators",
+            "reference", "reference designator",
+            "refdes", "ref", "refs",
+        ],
+    )
+    i_val = find_col(
+        headers,
+        [
+            "参数/型号", "参数", "型号",
+            "value", "comment",
+            "part", "part number", "partnumber",
+            "manufacturer part", "mpn",
+            "description", "name",
+        ],
+    )
+
+    i_cat = find_col(
+        headers,
+        ["分类", "category", "类型", "type", "class", "component type"],
+        required=False,
+    )
+    i_fp = find_col(
+        headers,
+        ["封装", "footprint", "package", "pattern"],
+        required=False,
+    )
+    i_asm = find_col(
+        headers,
+        ["装配", "assembly", "dnp", "贴装", "populate", "fitted"],
+        required=False,
+    )
+    i_note = find_col(
+        headers,
+        ["备注", "note", "notes", "remark", "remarks"],
+        required=False,
+    )
 
     parts = {}
-    for row in rows[1:]:
+
+    for row in data_rows:
         refs = split_designators(cell(row, i_ref))
         if not refs:
             continue
-        category = cell(row, i_cat, "其他") or "其他"
+
         value = cell(row, i_val, "") or "未标值"
         footprint = cell(row, i_fp, "")
         assembly = cell(row, i_asm, "贴装")
         note = cell(row, i_note, "")
+
+        # 有分类列就使用原分类；没有则根据每个位号分别推断。
+        raw_category = cell(row, i_cat, "") if i_cat is not None else ""
+
         for ref in refs:
+            category = raw_category or infer_category_from_ref(ref)
+
             parts[ref] = BomPart(
-                ref=ref, category=category, value=value,
-                footprint=footprint, assembly=assembly, note=note
+                ref=ref,
+                category=category,
+                value=value,
+                footprint=footprint,
+                assembly=assembly,
+                note=note,
             )
+
+    if not parts:
+        raise RuntimeError(
+            "BOM 中没有解析到器件。至少需要 Designator/位号 和 Value/Comment/参数型号列。"
+        )
+
+    print(f"    BOM列识别: 位号='{headers[i_ref]}', 参数/型号='{headers[i_val]}'")
+    if i_cat is None:
+        print("    BOM没有分类列：已根据 R/C/L/D/Q/U/J... 位号前缀自动分类")
+    else:
+        print(f"    分类列='{headers[i_cat]}'")
+
     return parts
+
 
 
 def load_pnp(path: Path) -> Dict[str, Placement]:
@@ -281,7 +429,15 @@ def load_pnp(path: Path) -> Dict[str, Placement]:
     if not rows:
         raise RuntimeError("PickAndPlace 为空")
 
-    headers = rows[0]
+    header_row = find_header_row(
+        rows,
+        [
+            ["Designator", "位号", "Reference", "RefDes"],
+            ["Mid X", "Center X", "X", "坐标X"],
+            ["Mid Y", "Center Y", "Y", "坐标Y"],
+        ],
+    )
+    headers = rows[header_row]
     i_ref = find_col(headers, ["Designator", "位号", "Reference", "RefDes"])
     i_x = find_col(headers, ["Mid X", "Center X", "X", "坐标X"])
     i_y = find_col(headers, ["Mid Y", "Center Y", "Y", "坐标Y"])
@@ -292,7 +448,7 @@ def load_pnp(path: Path) -> Dict[str, Placement]:
     i_smd = find_col(headers, ["SMD", "贴片"], required=False)
 
     out = {}
-    for row in rows[1:]:
+    for row in rows[header_row + 1:]:
         ref = cell(row, i_ref)
         if not ref:
             continue

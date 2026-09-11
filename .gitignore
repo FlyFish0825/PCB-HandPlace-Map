@@ -13,6 +13,7 @@ demo_output/
 双页贴片图*/
 *.pdf
 *.svg
+贴片定位图/
 
 # Real project inputs: keep private by default.
 # Remove/comment these rules if you intentionally want to publish examples.
